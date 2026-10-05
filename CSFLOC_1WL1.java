@@ -3,6 +3,10 @@ import java.util.*;
 import java.io.*;
 
 public class CSFLOC_1WL1 {
+    // Measurement ablation: only complementary-unit early event creation is gated.
+    // Root and ordinary unit storage, reasons, rollback, carry and cache remain active.
+    static boolean earlyConflictDetection = Boolean.parseBoolean(
+            System.getProperty("csfloc.ecd", "true"));
     //to-be-checked
     static int unitStackMode = 1; // 0 = original object stack; 1 = primitive array stack.
     static int unitChainMode = 0; // 0 = off; 1 = binary forward chain; 2 = general forward chain.
@@ -773,7 +777,7 @@ class UnitStorage {
         } else unitStack.push(new IntPair(level, unit));
         if(chainEnabled && !chainUses[chainSlot(unit)].isEmpty()) pendingUnits.addLast(unit);
         // early jump is possible?
-        if (positiveUnits.get(index) && negativeUnits.get(index)) {
+        if (CSFLOC_1WL1.earlyConflictDetection && positiveUnits.get(index) && negativeUnits.get(index)) {
             // we keep only the best early jump
             if (!ej.isPossible || level < ej.level) {
                 ej.isPossible = true;
