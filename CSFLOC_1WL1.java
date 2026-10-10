@@ -1361,37 +1361,124 @@ class HighLevelReader {
     // It can work well on particular instances: T/UT helped on dubois20, and appending
     // T to IWCR improved both tested SSA instances, although CUB won on ssa2670-130.
     // These results do not establish a family-wide recommendation; benchmark before use.
+    /**
+     * Exact T with incremental incidence counters and an indexed max heap.
+     * Selection is unchanged: positive score, non-waiting first, then larger
+     * active-clause score, larger static frequency, smaller variable index.
+     * A clause leaves the score on its unique 3 -> 2 transition. Waiting is
+     * monotone for an unselected variable, so heap keys only decrease.
+     * With L occurrences and q initially long clauses: O(L+n+m+(n+q)log(n+1))
+     * time and O(L+n+m) memory. This preserves the old T permutation exactly;
+     * prefix quality remains heuristic (neither minimum nor maximum binary).
+     */
     private int[] renameTwoSatPrefixStrategy(ArrayList<int[]> cs) {
-        int[] tr = new int[numberOfVariables + 1];
-        if (numberOfVariables == 0) return tr;
-
+        final int n = numberOfVariables;
+        int[] tr = new int[n + 1];
+        if (n == 0) return tr;
         int[][] clauseVars = createDistinctClauseVars(cs);
         int[] remaining = new int[clauseVars.length];
-        int[] frequency = variableFrequency(clauseVars);
-        boolean[] selected = new boolean[numberOfVariables + 1];
-        boolean[] waiting = new boolean[numberOfVariables + 1];
-
+        int[] frequency = new int[n + 1];
+        int[] score = new int[n + 1];
+        boolean[] waiting = new boolean[n + 1];
+        int active = 0;
         for (int i = 0; i < clauseVars.length; i++) {
             remaining[i] = clauseVars[i].length;
-        }
-
-        int next = 1;
-
-        while (next <= numberOfVariables && hasClauseWithMoreThanTwoRemaining(remaining)) {
-            recomputeTwoSatWaiting(clauseVars, remaining, selected, waiting);
-
-            int v = bestTwoSatPrefixVariable(
-                    clauseVars, remaining, selected, waiting, frequency, false);
-            if (v == 0) {
-                v = bestTwoSatPrefixVariable(
-                        clauseVars, remaining, selected, waiting, frequency, true);
+            if (remaining[i] > 2) active++;
+            for (int v : clauseVars[i]) {
+                frequency[v]++;
+                if (remaining[i] > 2) score[v]++;
             }
-            if (v == 0) break;
+        }
+        if (active == 0) return fillRemaining(tr, 1);
 
-            next = assignVariable(v, tr, selected, clauseVars, remaining, next);
+        // Compact variable -> clause incidence index, as in U-lite.
+        int[] start = new int[n + 2];
+        for (int v = 1; v <= n; v++) start[v + 1] = start[v] + frequency[v];
+        int[] incidence = new int[start[n + 1]];
+        int[] cursor = Arrays.copyOf(start, start.length);
+        for (int i = 0; i < clauseVars.length; i++)
+            for (int v : clauseVars[i]) incidence[cursor[v]++] = i;
+
+        TwoSatPrefixHeap heap = new TwoSatPrefixHeap(score, frequency, waiting);
+        int next = 1;
+        while (active > 0) {
+            int v = heap.removeBest();
+            if (score[v] <= 0) throw new IllegalStateException("T: no active variable");
+            tr[v] = next++;
+            for (int p = start[v]; p < start[v + 1]; p++) {
+                int i = incidence[p];
+                if (remaining[i]-- == 3) {
+                    active--;
+                    // Scan this clause once; exactly two unselected variables remain.
+                    for (int u : clauseVars[i]) {
+                        if (tr[u] == 0) {
+                            score[u]--;
+                            waiting[u] = true;
+                            heap.decreased(u);
+                        }
+                    }
+                }
+            }
+        }
+        return fillRemaining(tr, next);
+    }
+
+    private static final class TwoSatPrefixHeap {
+        final int[] heap, position, score, frequency;
+        final boolean[] waiting;
+        int size;
+
+        TwoSatPrefixHeap(int[] score, int[] frequency, boolean[] waiting) {
+            this.score = score;
+            this.frequency = frequency;
+            this.waiting = waiting;
+            heap = new int[score.length - 1];
+            position = new int[score.length];
+            Arrays.fill(position, -1);
+            for (int v = 1; v < score.length; v++) {
+                if (score[v] > 0) {
+                    position[v] = size;
+                    heap[size++] = v;
+                }
+            }
+            for (int p = size / 2 - 1; p >= 0; p--) siftDown(p);
         }
 
-        return fillRemaining(tr, next);
+        boolean better(int a, int b) {
+            if ((score[a] > 0) != (score[b] > 0)) return score[a] > 0;
+            if (waiting[a] != waiting[b]) return !waiting[a];
+            if (score[a] != score[b]) return score[a] > score[b];
+            if (frequency[a] != frequency[b]) return frequency[a] > frequency[b];
+            return a < b;
+        }
+
+        int removeBest() {
+            if (size == 0) throw new IllegalStateException("T: empty heap");
+            int v = heap[0];
+            position[v] = -1;
+            if (--size > 0) {
+                heap[0] = heap[size];
+                position[heap[0]] = 0;
+                siftDown(0);
+            }
+            return v;
+        }
+
+        void decreased(int v) { siftDown(position[v]); }
+
+        void siftDown(int p) {
+            int v = heap[p];
+            while (p < size / 2) {
+                int child = 2 * p + 1;
+                if (child + 1 < size && better(heap[child + 1], heap[child])) child++;
+                if (!better(heap[child], v)) break;
+                heap[p] = heap[child];
+                position[heap[p]] = p;
+                p = child;
+            }
+            heap[p] = v;
+            position[v] = p;
+        }
     }
 
     private int[] fillRemaining(int[] tr, int next) {
