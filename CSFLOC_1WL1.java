@@ -204,6 +204,26 @@ public class CSFLOC_1WL1 {
 }
 
 class CSFLOCSolver {
+    private static final class CounterDiagnostics {
+        private CounterDiagnostics() { }
+
+        static int unitIncrementPivot(boolean[] counter) {
+            int pivot = counter.length - 1;
+            while (pivot > 0 && counter[pivot]) pivot--;
+            return pivot;
+        }
+
+        static int unitIncrementPivot(BitSet counter, int variables) {
+            return Math.max(0, counter.previousClearBit(variables));
+        }
+
+        // A completed update leaves lower bits zero and changes this pivot 0 -> 1.
+        // More significant than the old +1 pivot means b-prime > b+1. Zero is terminal.
+        static boolean isNontrivial(int unitIncrementPivot, int completedPivot) {
+            return completedPivot > 0 && completedPivot < unitIncrementPivot;
+        }
+    }
+
     static long numberOfRunsOfTheMainLoop = 0;
     static long numberOfUsedLearnedClauses = 0;
     static long numberOfCasesWithoutLearnedClauses = 0;
@@ -222,6 +242,8 @@ class CSFLOCSolver {
     static long counterBitClears = 0;
     static long unionClausesBuilt = 0;
     static long runtimeNanos = 0;
+    static long inputClauseInspections = 0;
+    static long nontrivialCounterJumps = 0;
 
     ClauseSet S;
     private final int[] translate;
@@ -252,6 +274,8 @@ class CSFLOCSolver {
         counterBitClears = 0;
         unionClausesBuilt = 0;
         runtimeNanos = 0;
+        inputClauseInspections = 0;
+        nontrivialCounterJumps = 0;
     }
 
     public CSFLOCSolver(ClauseSet S, int[] translate) {
@@ -367,6 +391,7 @@ class CSFLOCSolver {
             index = findFirstNeg_v5(index, counter, unitStorage);
             counter[index] = true;
             counterBitSets++;
+            if (CounterDiagnostics.isNontrivial(numberOfVariables, index)) nontrivialCounterJumps++;
         }
         // smart else: because we have early jump on initial units
         else return null;
@@ -377,6 +402,7 @@ class CSFLOCSolver {
         }
         while(index > 0) {
             numberOfRunsOfTheMainLoop++;
+            int diagnosticUnitPivot = CounterDiagnostics.unitIncrementPivot(counter);
             if (!unitStorage.earlyJumpIsPossible()) {
                 index = findFirst_v5(index, counter, unitStorage);
             }
@@ -385,6 +411,7 @@ class CSFLOCSolver {
                 return counter;
             }
             index = increaseCounter_v5(index, true, counter);
+            if (CounterDiagnostics.isNontrivial(diagnosticUnitPivot, index)) nontrivialCounterJumps++;
             unitStorage.rollBack(index-1);
         }
         return null;
@@ -617,6 +644,8 @@ class CSFLOCSolver {
         printLong("effected causes installed", effectedCausesInstalled);
         printLong("effected causes cleared", effectedCausesCleared);
         printLong("union clauses built", unionClausesBuilt);
+        System.out.println("c diagnostic.input_clause_inspections : " + inputClauseInspections);
+        System.out.println("c diagnostic.nontrivial_counter_jumps : " + nontrivialCounterJumps);
         // Keep runtime as the last measurement line to make automated parsing easy.
         System.out.printf(Locale.US, "c %-44s : %.6f%n", "runtime seconds", runtimeNanos / 1_000_000_000.0);
     }
@@ -704,6 +733,7 @@ class UnitStorage {
             unitCandidates = lastButOneVarIndexNeg[level];
         }
         for(Clause c : unitCandidates) {
+            CSFLOCSolver.inputClauseInspections++;
             if (c.subsumedByLazy2(counter)) {
                 int index = c.lastVarIndex;
                 addUnitAndReason(level, c);
